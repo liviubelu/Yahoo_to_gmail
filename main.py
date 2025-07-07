@@ -26,7 +26,7 @@ def process_emails():
     try:
         server = IMAPClient('imap.mail.yahoo.com', ssl=True)
         server.login(yahoo_user, yahoo_pass)
-        server.select_folder('INBOX', readonly=True)
+        server.select_folder('INBOX', readonly=False)  # setează readonly=False pentru a putea modifica flags
 
         messages = server.search(['UNSEEN'])
 
@@ -51,11 +51,11 @@ def process_emails():
                 body = msg.get_payload(decode=True).decode(charset, errors="ignore")
 
             forwarded = EmailMessage()
-            forwarded['Subject'] = subject
-            forwarded['From'] = sender
+            forwarded['Subject'] = f"FWD: {subject}"
             forwarded['To'] = gmail_user
+            forwarded['Reply-To'] = sender  # Permite să răspunzi expeditorului real
 
-            forwarded.set_content(f"""
+            forwarded.set_content(f"""\
 --- Forwarded message ---
 From: {sender}
 To: {original_to}
@@ -63,11 +63,14 @@ Date: {date}
 Subject: {subject}
 
 {body}
-            """)
+""")
 
             with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
                 smtp.login(gmail_user, gmail_pass)
                 smtp.send_message(forwarded)
+
+            # ✅ marchează emailul ca citit după trimitere
+            server.set_flags(uid, ['\\Seen'])
 
         print("✅ Emailuri Yahoo forwardate cu succes.")
     except Exception as e:
