@@ -1,66 +1,68 @@
-from flask import Flask
-import threading
 import smtplib
 import email
 import os
+import time
+from flask import Flask
+from threading import Thread
 from imapclient import IMAPClient
 
-# ------------------- Flask pentru UptimeRobot -------------------
 app = Flask(__name__)
 
 @app.route('/')
-def index():
-    return "✅ Serverul funcționează continuu."
+def home():
+    return '✅ Serverul funcționează continuu.'
 
-def start_flask():
-    app.run(host="0.0.0.0", port=10000)
+def process_emails():
+    yahoo_user = os.environ.get('YAHOO_USER')
+    yahoo_pass = os.environ.get('YAHOO_PASS')
+    gmail_user = os.environ.get('GMAIL_USER')
+    gmail_pass = os.environ.get('GMAIL_PASS')
 
-threading.Thread(target=start_flask).start()
+    if not all([yahoo_user, yahoo_pass, gmail_user, gmail_pass]):
+        print("❌ Variabilele de mediu lipsă.")
+        return
 
-# ----------------- Script Yahoo → Gmail -------------------------
-yahoo_user = os.getenv('YAHOO_USER')
-yahoo_pass = os.getenv('YAHOO_PASS')
-gmail_user = os.getenv('GMAIL_USER')
-gmail_pass = os.getenv('GMAIL_PASS')
+    try:
+        server = IMAPClient('imap.mail.yahoo.com', ssl=True)
+        server.login(yahoo_user, yahoo_pass)
+        server.select_folder('INBOX', readonly=True)
 
-if not all([yahoo_user, yahoo_pass, gmail_user, gmail_pass]):
-    print("❌ Variabilele de mediu lipsesc!")
-    exit(1)
+        messages = server.search(['UNSEEN'])
 
-try:
-    server = IMAPClient('imap.mail.yahoo.com', ssl=True)
-    server.login(yahoo_user, yahoo_pass)
-    server.select_folder('INBOX', readonly=True)
+        for uid, message_data in server.fetch(messages[-3:], ['RFC822']).items():
+            raw_email = message_data[b'RFC822']
+            msg = email.message_from_bytes(raw_email)
 
-    messages = server.search(['UNSEEN'])
+            subject = msg["Subject"] or "(Fără subiect)"
+            sender = msg["From"] or "(Necunoscut)"
+            body = ""
 
-    for uid, message_data in server.fetch(messages[-3:], ['RFC822']).items():
-        raw_email = message_data[b'RFC822']
-        msg = email.message_from_bytes(raw_email)
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        charset = part.get_content_charset() or 'utf-8'
+                        body = part.get_payload(decode=True).decode(charset, errors="ignore")
+                        break
+            else:
+                charset = msg.get_content_charset() or 'utf-8'
+                body = msg.get_payload(decode=True).decode(charset, errors="ignore")
 
-        subject = msg["Subject"] or "(Fără subiect)"
-        sender = msg["From"] or "(Necunoscut)"
-        body = ""
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+                smtp.login(gmail_user, gmail_pass)
+                smtp.sendmail(
+                    from_addr=gmail_user,
+                    to_addrs=gmail_user,
+                    msg=f"Subject: FWD from Yahoo: {subject}\n\nFrom: {sender}\n\n{body}"
+                )
+        print("✅ Emailuri Yahoo trimise cu succes.")
+    except Exception as e:
+        print(f"❌ Eroare: {e}")
 
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain" and part.get_payload(decode=True):
-                    charset = part.get_content_charset() or 'utf-8'
-                    body = part.get_payload(decode=True).decode(charset, errors="ignore")
-                    break
-        else:
-            charset = msg.get_content_charset() or 'utf-8'
-            body = msg.get_payload(decode=True).decode(charset, errors="ignore")
+def run_loop():
+    while True:
+        process_emails()
+        time.sleep(60)  # rulează la fiecare 60 de secunde
 
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(gmail_user, gmail_pass)
-            smtp.sendmail(
-                from_addr=gmail_user,
-                to_addrs=gmail_user,
-                msg=f"Subject: FWD from Yahoo: {subject}\n\nFrom: {sender}\n\n{body}"
-            )
-
-    print("✅ Emailuri Yahoo transferate cu succes.")
-
-except Exception as e:
-    print(f"❌ Eroare: {e}")
+if __name__ == '__main__':
+    Thread(target=lambda: app.run(host='0.0.0.0', port=10000)).start()
+    run_loop()
