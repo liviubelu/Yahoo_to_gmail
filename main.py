@@ -5,6 +5,7 @@ import time
 from flask import Flask
 from threading import Thread
 from imapclient import IMAPClient
+from email.message import EmailMessage
 
 app = Flask(__name__)
 
@@ -35,6 +36,8 @@ def process_emails():
 
             subject = msg["Subject"] or "(Fără subiect)"
             sender = msg["From"] or "(Necunoscut)"
+            original_to = msg["To"] or "(Necunoscut)"
+            date = msg["Date"] or "(Necunoscut)"
             body = ""
 
             if msg.is_multipart():
@@ -47,21 +50,33 @@ def process_emails():
                 charset = msg.get_content_charset() or 'utf-8'
                 body = msg.get_payload(decode=True).decode(charset, errors="ignore")
 
+            forwarded = EmailMessage()
+            forwarded['Subject'] = subject
+            forwarded['From'] = sender
+            forwarded['To'] = gmail_user
+
+            forwarded.set_content(f"""
+--- Forwarded message ---
+From: {sender}
+To: {original_to}
+Date: {date}
+Subject: {subject}
+
+{body}
+            """)
+
             with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
                 smtp.login(gmail_user, gmail_pass)
-                smtp.sendmail(
-                    from_addr=gmail_user,
-                    to_addrs=gmail_user,
-                    msg=f"Subject: FWD from Yahoo: {subject}\n\nFrom: {sender}\n\n{body}"
-                )
-        print("✅ Emailuri Yahoo trimise cu succes.")
+                smtp.send_message(forwarded)
+
+        print("✅ Emailuri Yahoo forwardate cu succes.")
     except Exception as e:
         print(f"❌ Eroare: {e}")
 
 def run_loop():
     while True:
         process_emails()
-        time.sleep(60)  # rulează la fiecare 60 de secunde
+        time.sleep(60)
 
 if __name__ == '__main__':
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000)).start()
